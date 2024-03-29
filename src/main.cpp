@@ -9,8 +9,8 @@
 #define I2C_CLK 400000              // I2C clock rate
 #define UART_CLK 115200             // UART baud rate
 
-const char* ssid = "YOUR_SSID";
-const char* password = "YOUR_PASSWORD";
+const char* ssid = WIFI_SSID;
+const char* password = WIFI_PASSWORD;
 
 const char *hmacKey = "super_secret_key";
 
