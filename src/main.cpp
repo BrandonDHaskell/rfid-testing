@@ -2,6 +2,7 @@
 #include <Adafruit_PN532.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
+#include <ArduinoJson.h>
 #include "mbedtls/md.h"
 
 #define PN532_SCL 36                // I2C SCL pin
@@ -9,8 +10,10 @@
 #define I2C_CLK 400000              // I2C clock rate
 #define UART_CLK 115200             // UART baud rate
 
-const char* ssid = WIFI_SSID;
-const char* password = WIFI_PASSWORD;
+// const char* ssid = WIFI_SSID;
+// const char* password = WIFI_PASSWORD;
+// const char* apiHost = API_HOST_NAME;
+// const char* hostPort = API_PORT;
 
 const char *hmacKey = "super_secret_key";
 
@@ -31,21 +34,88 @@ String computeHMAC(uint8_t *uid, uint8_t uidLength) {
     mbedtls_md_hmac_finish(&ctx, hmacResult);
     mbedtls_md_free(&ctx);
 
-  // Construct the HMAC hex string
-  String hmacHexString = "";
-  for (int i = 0; i < sizeof(hmacResult); i++) {
-    char str[3];
-    sprintf(str, "%02x", hmacResult[i]); // Convert each byte to hex and append to the string
-    hmacHexString += str;
-  }
+    // Construct the HMAC hex string
+    String hmacHexString = "";
+    for (int i = 0; i < sizeof(hmacResult); i++) {
+        char str[3];
+        sprintf(str, "%02x", hmacResult[i]); // Convert each byte to hex and append to the string
+        hmacHexString += str;
+    }
 
-  return hmacHexString;
+    return hmacHexString;
+}
+
+bool makeHttpRequest(String hmacHash) {
+    bool isValid = false;
+    // Ensure WiFi is still connected
+    if(WiFi.status() != WL_CONNECTED) {
+        Serial.println("WiFi not connected");
+        return isValid; // Early exit if WiFi is not connected
+    }
+
+    HTTPClient http;
+    // Construct the URL for the request
+    String url = "http://zymurgy:3001/api/" + hmacHash;
+    http.begin(url); // Initialize the HTTP client with the URL
+    int httpCode = http.GET(); // Perform the GET request
+
+    if(httpCode == 200) { // Check if the request was successful
+        String payload = http.getString(); // Get the response payload
+        Serial.print("HTTP Response: ");
+        Serial.println(payload);
+
+        // Parse the JSON response
+        DynamicJsonDocument doc(200);
+        DeserializationError error = deserializeJson(doc, payload);
+        
+        if (error) {
+            Serial.print(F("deserializeJson() failed: "));
+            Serial.println(error.f_str());
+            return isValid;
+        }
+
+        // Extract "isValid" value
+        if(doc.containsKey("isValid")) {
+            isValid = doc["isValid"].as<bool>();
+            Serial.println(isValid ? "True" : "False");
+        } else {
+            Serial.println("Error: Payload does not contain 'isValid'");
+        }
+    } else if(httpCode == 404) { // Check if the response is 404
+        Serial.println("False"); // Handle specific case for 404
+    } else {
+        // Handle any other HTTP error codes
+        Serial.print("Error on HTTP request: ");
+        Serial.println(httpCode);
+        isValid = false;
+    }
+
+    http.end(); // Close the connection
+    return isValid;
 }
 
 void setup(void) {
     Serial.begin(UART_CLK);
 
-    WiFi.begin(ssid, password);
+    // Debugging calls
+    Serial.print("SSID: '");
+    Serial.print(WIFI_SSID);
+    Serial.println("'");
+
+    Serial.print("Password: '");
+    Serial.print(WIFI_PASSWORD);
+    Serial.println("'");
+
+    Serial.println(WIFI_SSID);
+    Serial.println(WIFI_PASSWORD);
+    Serial.println(TEST_MACRO);
+
+    // Initialize GPIO pin 2 as an output and set it to LOW
+    pinMode(2, OUTPUT);
+    digitalWrite(2, LOW);
+
+    // Establish WiFi connection
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
     Serial.println("Connecting to WiFi...");
     while (WiFi.status() != WL_CONNECTED) {
         delay(1000);
@@ -53,9 +123,11 @@ void setup(void) {
     }
     Serial.println("Connected to WiFi");
 
+    // Initialize card reader and communication
     nfc.begin();
     Wire.setClock(I2C_CLK);
 
+    // Check reader
     uint32_t versiondata = nfc.getFirmwareVersion();
     if (!versiondata) {
         Serial.print("Didn't find PN532 board");
@@ -69,8 +141,8 @@ void setup(void) {
 
 void loop(void) {
     uint8_t success;
-    uint8_t uid[] = { 0, 0, 0, 0, 0, 0, 0 };    // Buffer to store the returned UID
-    uint8_t uidLength;                          // Length of the UID (4 or 7 bytes depending on ISO14443A card type)
+    uint8_t uid[] = { 0, 0, 0, 0, 0, 0, 0 };        // Buffer to store the returned UID
+    uint8_t uidLength;                              // Length of the UID (4 or 7 bytes depending on ISO14443A card type)
 
     success = nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength);
 
@@ -78,19 +150,15 @@ void loop(void) {
         String hmacHex = computeHMAC(uid, uidLength);
         Serial.print("UID HMAC Hex: ");
         Serial.println(hmacHex);
-
-        // Display some details of the card
-        // Serial.print("Found an ISO14443A card with UID: 0x");
-        // for (uint8_t i = 0; i < uidLength; i++) {
-        //     // Print each byte in hex format
-        //     if (uid[i] < 0x10) {
-        //         // Print leading zero
-        //         Serial.print("0");
-        //     }
-        //     Serial.print(uid[i], HEX);
-        // }
-        // Serial.println();
-        // TODO - add additional logic to get read data
+        bool isValid = makeHttpRequest(hmacHex);
+        
+        if (isValid) {
+            Serial.println("Setting strike pin to HIGH...");
+            digitalWrite(2, HIGH);                  // Set GPIO 2 high
+            delay(7000);                            // Hold the pin high for 7 seconds
+            Serial.println("Setting strike pin to LOW...");
+            digitalWrite(2, LOW);                   // Then set it low
+        }
     }
 
     delay(1000);
