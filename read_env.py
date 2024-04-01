@@ -1,7 +1,7 @@
 Import("env")
 import os
 
-print(env.Dump())
+# print(env.Dump())
 # print(projenv.Dump())
 
 def load_dotenv():

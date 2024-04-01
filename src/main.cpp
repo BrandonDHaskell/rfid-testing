@@ -1,3 +1,5 @@
+#include <cstring> // Include this for C-string operations
+#include <cstdio>  // Include for sprintf
 #include <Wire.h>
 #include <Adafruit_PN532.h>
 #include <WiFi.h>
@@ -9,40 +11,38 @@
 #define PN532_SDA 33                // I2C SDA pin
 #define I2C_CLK 400000              // I2C clock rate
 #define UART_CLK 115200             // UART baud rate
+#define HMAC_HEX_SIZE 65            // maX HMAC hex LENGTH for SHA-256 hex + 1 for null terminator
 
 // const char* ssid = WIFI_SSID;
 // const char* password = WIFI_PASSWORD;
 // const char* apiHost = API_HOST_NAME;
 // const char* hostPort = API_PORT;
 
-const char *hmacKey = "super_secret_key";
-
 // Create PN532 instance using I2C
 Adafruit_PN532 nfc(PN532_SCL, PN532_SDA);
 
 // Helper function for encrypting UIDs
-String computeHMAC(uint8_t *uid, uint8_t uidLength) {
+void computeHMAC(uint8_t *uid, uint8_t uidLength, char *hmacHexOut) {
+    
+    const char *hmacKey = "super_secret_key";
+
     mbedtls_md_context_t ctx;
     mbedtls_md_type_t md_type = MBEDTLS_MD_SHA256;
-    const size_t keyLength = strlen(hmacKey);
+    const size_t keyLength = std::strlen(hmacKey);
     unsigned char hmacResult[32];   // SHA-256 outputs 32 bytes
 
     mbedtls_md_init(&ctx);
     mbedtls_md_setup(&ctx, mbedtls_md_info_from_type(md_type), 1); // 1 for HMAC
     mbedtls_md_hmac_starts(&ctx, (const unsigned char *)hmacKey, keyLength);
-    mbedtls_md_hmac_update(&ctx, (const unsigned char *)uid, uidLength);
+    mbedtls_md_hmac_update(&ctx, uid, uidLength);
     mbedtls_md_hmac_finish(&ctx, hmacResult);
     mbedtls_md_free(&ctx);
 
-    // Construct the HMAC hex string
-    String hmacHexString = "";
+    // Convert each byte to hex and append to the string
     for (int i = 0; i < sizeof(hmacResult); i++) {
-        char str[3];
-        sprintf(str, "%02x", hmacResult[i]); // Convert each byte to hex and append to the string
-        hmacHexString += str;
+        sprintf(hmacHexOut + i * 2, "%02x", hmacResult[i]);
     }
-
-    return hmacHexString;
+    hmacHexOut[64] = '\0'; // Ensure the string is null-terminated
 }
 
 bool makeHttpRequest(String hmacHash) {
@@ -147,7 +147,8 @@ void loop(void) {
     success = nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength);
 
     if (success) {
-        String hmacHex = computeHMAC(uid, uidLength);
+        char hmacHex[HMAC_HEX_SIZE]; // Buffer for the HMAC hex string
+        computeHMAC(uid, uidLength, hmacHex);
         Serial.print("UID HMAC Hex: ");
         Serial.println(hmacHex);
         bool isValid = makeHttpRequest(hmacHex);
