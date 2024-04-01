@@ -13,6 +13,14 @@
 #define UART_CLK 115200             // UART baud rate
 #define HMAC_HEX_SIZE 65            // maX HMAC hex LENGTH for SHA-256 hex + 1 for null terminator
 
+bool isPinHigh = false;             // Tracks whether latch is unlocked
+unsigned long pinHighStartTime = 0; // Records when latch was unlocked
+const unsigned long pinHighDuration = 7000; // Duration to keep pin 2 high, in milliseconds
+
+unsigned long lastRequestTime = 0;  // Time when the last HTTP request was made
+const unsigned long requestInterval = 7000; // Minimum interval between requests, e.g., 7 seconds
+
+
 // const char* ssid = WIFI_SSID;
 // const char* password = WIFI_PASSWORD;
 // const char* apiHost = API_HOST_NAME;
@@ -55,7 +63,7 @@ bool makeHttpRequest(String hmacHash) {
 
     HTTPClient http;
     // Construct the URL for the request
-    String url = "http://zymurgy:3001/api/" + hmacHash;
+    String url = "http://10.0.0.33:3001/api/" + hmacHash;
     http.begin(url); // Initialize the HTTP client with the URL
     int httpCode = http.GET(); // Perform the GET request
 
@@ -140,27 +148,42 @@ void setup(void) {
 }
 
 void loop(void) {
-    uint8_t success;
+    uint8_t success = false;
     uint8_t uid[] = { 0, 0, 0, 0, 0, 0, 0 };        // Buffer to store the returned UID
     uint8_t uidLength;                              // Length of the UID (4 or 7 bytes depending on ISO14443A card type)
 
     success = nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength);
 
     if (success) {
-        char hmacHex[HMAC_HEX_SIZE]; // Buffer for the HMAC hex string
-        computeHMAC(uid, uidLength, hmacHex);
-        Serial.print("UID HMAC Hex: ");
-        Serial.println(hmacHex);
-        bool isValid = makeHttpRequest(hmacHex);
+         // Check if sufficient time has passed since the last HTTP request
+        if (millis() - lastRequestTime >= requestInterval) {
+            char hmacHex[HMAC_HEX_SIZE];                // Buffer for the HMAC hex string
+            
+            computeHMAC(uid, uidLength, hmacHex);
+            Serial.print("UID HMAC Hex: ");
+            Serial.println(hmacHex);
+            
+            bool isValid = makeHttpRequest(hmacHex);    // Make HTTP Request
+
+            // Update lastRequestTime to current time
+            lastRequestTime = millis();
         
-        if (isValid) {
-            Serial.println("Setting strike pin to HIGH...");
-            digitalWrite(2, HIGH);                  // Set GPIO 2 high
-            delay(7000);                            // Hold the pin high for 7 seconds
-            Serial.println("Setting strike pin to LOW...");
-            digitalWrite(2, LOW);                   // Then set it low
+            if (isValid && !isPinHigh) { // Check if uid is valid and pin is not already high
+                Serial.println("Setting strike pin to HIGH...");
+                digitalWrite(2, HIGH);                  // Set GPIO 2 high
+                isPinHigh = true;                       // Mark pin as high
+                pinHighStartTime = millis();            // Record the time when pin was set high
+                Serial.println(pinHighStartTime);
+            }
         }
     }
 
-    delay(1000);
+    // Non-blocking delay logic
+    if (isPinHigh && millis() - pinHighStartTime >= pinHighDuration) {
+        Serial.println("Setting strike pin to LOW...");
+        digitalWrite(2, LOW);                       // Then set it low
+        isPinHigh = false;                          // Reset the pin state
+    }
+    Serial.println(millis());
+    // delay(1000);
 }
